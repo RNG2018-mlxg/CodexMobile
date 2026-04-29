@@ -1494,6 +1494,7 @@ button {
 
 .composer-wrap {
   position: relative;
+  z-index: 30;
   min-width: 0;
   width: 100%;
   max-width: 100vw;
@@ -1501,7 +1502,7 @@ button {
   background: rgba(247, 247, 244, 0.92);
   backdrop-filter: blur(18px);
   border-top: 1px solid rgba(222, 223, 220, 0.84);
-  overflow: hidden;
+  overflow: visible;
 }
 
 [data-keyboard="open"] .composer-wrap {
@@ -1518,8 +1519,8 @@ button {
 
 .composer-menu {
   position: absolute;
-  bottom: calc(100% - 4px);
-  z-index: 35;
+  bottom: calc(100% + 6px);
+  z-index: 60;
   display: flex;
   flex-direction: column;
   gap: 2px;
