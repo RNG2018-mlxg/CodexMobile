@@ -1,0 +1,24 @@
+{
+  "name": "CodexMobile",
+  "short_name": "CodexMobile",
+  "description": "Remote Codex control for iPhone over a private network.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f7f4",
+  "theme_color": "#f7f7f4",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/codex-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/codex-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

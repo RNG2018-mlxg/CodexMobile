@@ -1,0 +1,14 @@
+node_modules/
+client/dist/
+.codexmobile/
+.env
+.env.*
+!.env.example
+npm-debug.log*
+*.local
+*.pfx
+*.pem
+*.key
+*.cer
+*.crt
+*.log
