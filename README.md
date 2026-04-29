@@ -54,7 +54,7 @@ CodexMobile Node.js 服务
 ## 快速开始
 
 ```powershell
-git clone https://github.com/2449796202qq-arch/CodexMobile.git
+git clone https://github.com/RNG2018-mlxg/CodexMobile.git
 cd CodexMobile
 npm install
 npm run build
