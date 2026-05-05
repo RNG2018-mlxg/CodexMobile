@@ -119,6 +119,7 @@ npm run start:env
 - `CODEXMOBILE_PAIRING_CODE`：可选固定 6 位配对码；不设置则启动时随机生成
 - `CODEX_HOME`：Codex 配置目录，默认 `~/.codex`
 - `CODEXMOBILE_HOME`：CodexMobile 本地状态目录，默认 `.codexmobile/state`
+- `CODEXMOBILE_CODEX_PATH`：可选 Codex 可执行文件路径；macOS 下如果存在 Codex.app 内置 CLI，会优先使用 `/Applications/Codex.app/Contents/Resources/codex`
 - `CODEXMOBILE_FEISHU_APP_ID` / `CODEXMOBILE_FEISHU_APP_SECRET`：可选飞书应用凭证，用于 `lark-cli` 文档集成
 - `LARK_APP_ID` / `LARK_APP_SECRET`：可选飞书凭证别名，供 `lark-cli` 和 Codex 子进程读取
 - `CLIPROXYAPI_CONFIG`：CLIProxyAPI 配置文件路径

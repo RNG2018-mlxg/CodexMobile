@@ -10,6 +10,7 @@ const CODEXMOBILE_REPLY_INSTRUCTION = [
   'CodexMobile iOS/PWA 回复要求：最终回复必须简短、直接。',
   '除非用户明确要求，最终只写结果、关键链接、必要下一步；不要复述内部过程、命令日志或长篇验证细节。'
 ].join('\n');
+const MACOS_CODEX_APP_CLI = '/Applications/Codex.app/Contents/Resources/codex';
 
 async function ensureAsciiWorkingDirectory(projectPath) {
   if (process.platform !== 'win32' || !NON_ASCII_PATH_PATTERN.test(projectPath)) {
@@ -222,6 +223,22 @@ function codexErrorDiagnostics(error) {
   };
 }
 
+async function resolveCodexPathOverride() {
+  const explicitPath = String(process.env.CODEXMOBILE_CODEX_PATH || '').trim();
+  if (explicitPath) {
+    return explicitPath;
+  }
+  if (process.platform !== 'darwin') {
+    return undefined;
+  }
+  try {
+    await fs.access(MACOS_CODEX_APP_CLI);
+    return MACOS_CODEX_APP_CLI;
+  } catch {
+    return undefined;
+  }
+}
+
 function emitActivity(emit, { sessionId, turnId, messageId, item, kind, status }) {
   const detail = detailFromItem(item);
   emit({
@@ -420,7 +437,10 @@ export async function runCodexTurn({ sessionId, draftSessionId, projectPath, mes
       larkCliContext.env.CODEXMOBILE_TURN_ID = turnId;
       larkCliContext.env.CODEXMOBILE_SESSION_ID = sessionId || draftSessionId || '';
     }
-    const codex = new Codex({ env: larkCliContext.env || { ...process.env } });
+    const codex = new Codex({
+      codexPathOverride: await resolveCodexPathOverride(),
+      env: larkCliContext.env || { ...process.env }
+    });
     const threadOptions = {
       workingDirectory,
       skipGitRepoCheck: true,
