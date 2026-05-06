@@ -1,15 +1,22 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { buildCodexLarkCliContext } from './lark-cli.js';
 import { detectFeishuSkillKeys } from './feishu-skills.js';
 
 const activeRuns = new Map();
 const NON_ASCII_PATH_PATTERN = /[^\u0000-\u007F]/;
+const MACOS_CODEX_APP_CLI = '/Applications/Codex.app/Contents/Resources/codex';
+const DEFAULT_LOCAL_PROXY_URL = 'http://127.0.0.1:7890';
+const PROXY_ENV_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'];
+const NO_PROXY_ENV_KEYS = ['NO_PROXY', 'no_proxy'];
 const CODEXMOBILE_REPLY_INSTRUCTION = [
   'CodexMobile iOS/PWA 回复要求：最终回复必须简短、直接。',
   '除非用户明确要求，最终只写结果、关键链接、必要下一步；不要复述内部过程、命令日志或长篇验证细节。'
 ].join('\n');
+let defaultProxyProbe = { checkedAt: 0, reachable: false };
+let loggedCodexEnvSignature = '';
 
 async function ensureAsciiWorkingDirectory(projectPath) {
   if (process.platform !== 'win32' || !NON_ASCII_PATH_PATTERN.test(projectPath)) {
@@ -222,6 +229,144 @@ function codexErrorDiagnostics(error) {
   };
 }
 
+function truthyEnv(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || '').trim());
+}
+
+function disabledProxyValue(value) {
+  return /^(0|false|no|off|none|direct|disabled)$/i.test(String(value || '').trim());
+}
+
+function firstProxyValue(env) {
+  for (const key of PROXY_ENV_KEYS) {
+    const value = String(env[key] || '').trim();
+    if (value) {
+      return value;
+    }
+  }
+  return '';
+}
+
+function mergeNoProxy(env) {
+  const additions = ['localhost', '127.0.0.1', '::1'];
+  for (const key of NO_PROXY_ENV_KEYS) {
+    const current = String(env[key] || '').trim();
+    if (current === '*') {
+      env[key] = additions.join(',');
+      continue;
+    }
+    const values = new Set(
+      current
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+    );
+    for (const item of additions) {
+      values.add(item);
+    }
+    env[key] = [...values].join(',');
+  }
+  if (!env.NO_PROXY && !env.no_proxy) {
+    env.NO_PROXY = additions.join(',');
+    env.no_proxy = env.NO_PROXY;
+  }
+}
+
+async function canConnectToProxy(proxyUrl) {
+  let parsed;
+  try {
+    parsed = new URL(proxyUrl);
+  } catch {
+    return false;
+  }
+  const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+  const host = parsed.hostname || '127.0.0.1';
+  return await new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    const done = (ok) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(250);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
+}
+
+async function defaultLocalProxyReachable() {
+  const now = Date.now();
+  if (now - defaultProxyProbe.checkedAt < 10000) {
+    return defaultProxyProbe.reachable;
+  }
+  const reachable = await canConnectToProxy(DEFAULT_LOCAL_PROXY_URL);
+  defaultProxyProbe = { checkedAt: now, reachable };
+  return reachable;
+}
+
+async function resolveCodexProxyUrl(env) {
+  if (truthyEnv(env.CODEXMOBILE_CODEX_PROXY_DISABLED)) {
+    return '';
+  }
+  const explicit = String(env.CODEXMOBILE_CODEX_PROXY || env.CODEXMOBILE_PROXY_URL || env.CODEXMOBILE_CLASH_PROXY_URL || '').trim();
+  if (explicit) {
+    return disabledProxyValue(explicit) ? '' : explicit;
+  }
+  if (firstProxyValue(env)) {
+    return '';
+  }
+  return await defaultLocalProxyReachable() ? DEFAULT_LOCAL_PROXY_URL : '';
+}
+
+function applyProxyEnv(env, proxyUrl) {
+  if (!proxyUrl) {
+    mergeNoProxy(env);
+    return;
+  }
+  for (const key of PROXY_ENV_KEYS) {
+    if (!env[key]) {
+      env[key] = proxyUrl;
+    }
+  }
+  mergeNoProxy(env);
+}
+
+async function buildCodexChildEnv(baseEnv = process.env) {
+  const env = { ...baseEnv };
+  const proxyUrl = await resolveCodexProxyUrl(env);
+  applyProxyEnv(env, proxyUrl);
+  return env;
+}
+
+async function resolveCodexPathOverride() {
+  const explicitPath = String(process.env.CODEXMOBILE_CODEX_PATH || '').trim();
+  if (explicitPath) {
+    return explicitPath;
+  }
+  if (process.platform !== 'darwin') {
+    return undefined;
+  }
+  try {
+    await fs.access(MACOS_CODEX_APP_CLI);
+    return MACOS_CODEX_APP_CLI;
+  } catch {
+    return undefined;
+  }
+}
+
+function logCodexChildRuntime(env, codexPathOverride) {
+  const proxy = firstProxyValue(env) || 'direct';
+  const noProxy = env.NO_PROXY || env.no_proxy || '';
+  const codexPath = codexPathOverride || 'sdk-bundled';
+  const signature = `${codexPath}|${proxy}|${noProxy}`;
+  if (signature === loggedCodexEnvSignature) {
+    return;
+  }
+  loggedCodexEnvSignature = signature;
+  console.log(`[codex] child runtime codex=${codexPath} proxy=${proxy} no_proxy=${noProxy || '(empty)'}`);
+}
+
 function emitActivity(emit, { sessionId, turnId, messageId, item, kind, status }) {
   const detail = detailFromItem(item);
   emit({
@@ -273,6 +418,7 @@ function emitCodexEvent(event, sessionId, turnId, emit, state) {
 
   if (event.type === 'error') {
     const error = event.message || 'Codex stream error';
+    state.failed = true;
     emitStatus(emit, { sessionId, turnId, kind: 'error', status: 'failed', detail: error });
     emit({ type: 'chat-error', sessionId, turnId, error });
     console.error('[codex] Stream error:', error);
@@ -414,13 +560,20 @@ export async function runCodexTurn({ sessionId, draftSessionId, projectPath, mes
   let currentSessionId = sessionId || null;
   let previousSessionId = draftSessionId || sessionId || null;
   let thread = null;
+  let completed = false;
 
   try {
     if (larkCliContext.enabled && larkCliContext.env) {
       larkCliContext.env.CODEXMOBILE_TURN_ID = turnId;
       larkCliContext.env.CODEXMOBILE_SESSION_ID = sessionId || draftSessionId || '';
     }
-    const codex = new Codex({ env: larkCliContext.env || { ...process.env } });
+    const codexEnv = await buildCodexChildEnv(larkCliContext.env || process.env);
+    const codexPathOverride = await resolveCodexPathOverride();
+    logCodexChildRuntime(codexEnv, codexPathOverride);
+    const codex = new Codex({
+      codexPathOverride,
+      env: codexEnv
+    });
     const threadOptions = {
       workingDirectory,
       skipGitRepoCheck: true,
@@ -479,6 +632,7 @@ export async function runCodexTurn({ sessionId, draftSessionId, projectPath, mes
     }
 
     if (!state.failed) {
+      completed = true;
       emit({
         type: 'chat-complete',
         sessionId: currentSessionId,
@@ -521,7 +675,7 @@ export async function runCodexTurn({ sessionId, draftSessionId, projectPath, mes
     }
   }
 
-  return currentSessionId;
+  return completed ? currentSessionId : null;
 }
 
 function runMatchesIdentifier(run, identifier) {

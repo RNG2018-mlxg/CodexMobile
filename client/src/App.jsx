@@ -381,6 +381,11 @@ function upsertSessionInProject(current, projectId, session, replaceId = null) {
   };
 }
 
+function isUsableSessionId(value) {
+  const id = String(value || '').trim();
+  return Boolean(id && !id.startsWith('draft-') && !id.startsWith('codex-'));
+}
+
 function statusMessageId(payload) {
   return `status-${payload.turnId || payload.sessionId || 'current'}`;
 }
@@ -1031,7 +1036,7 @@ function Drawer({
                             <button
                               type="button"
                               className="thread-main"
-                              onClick={() => onSelectSession(session)}
+                              onClick={() => onSelectSession(project, session)}
                             >
                               <span>{session.title || '对话'}</span>
                               <small>{session.draft ? '待发送' : formatTime(session.updatedAt)}</small>
@@ -2186,6 +2191,47 @@ export default function App() {
   const voiceDialogAudioUrlRef = useRef('');
   const voiceDialogAwaitingTurnRef = useRef(null);
   const voiceDialogLastSpokenRef = useRef('');
+
+  function sessionBelongsToProject(session, project) {
+    if (!session || !project?.id) {
+      return false;
+    }
+    if (session.projectId) {
+      return session.projectId === project.id;
+    }
+    return Boolean((sessionsByProject[project.id] || []).some((item) => item.id === session.id));
+  }
+
+  function resolveSessionForTurn(project) {
+    if (!project?.id) {
+      return null;
+    }
+
+    if (sessionBelongsToProject(selectedSession, project)) {
+      return { ...selectedSession, projectId: selectedSession.projectId || project.id };
+    }
+
+    const currentSession = selectedSessionRef.current;
+    if (sessionBelongsToProject(currentSession, project)) {
+      return { ...currentSession, projectId: currentSession.projectId || project.id };
+    }
+
+    const projectSessions = sessionsByProject[project.id] || [];
+    const byId = new Map(projectSessions.map((session) => [session.id, { ...session, projectId: session.projectId || project.id }]));
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const sessionId = String(messages[index]?.sessionId || '').trim();
+      if (!isUsableSessionId(sessionId)) {
+        continue;
+      }
+      const matched = byId.get(sessionId);
+      if (matched) {
+        return matched;
+      }
+    }
+
+    return null;
+  }
   const voiceDialogAutoListenRef = useRef(false);
   const voiceDialogOpenRef = useRef(false);
   const voiceDialogStateRef = useRef('idle');
@@ -3460,7 +3506,10 @@ export default function App() {
     setLoadingProjectId(project.id);
     try {
       const data = await apiFetch(`/api/projects/${encodeURIComponent(project.id)}/sessions`);
-      const nextSessions = data.sessions || [];
+      const nextSessions = (data.sessions || []).map((session) => ({
+        ...session,
+        projectId: session.projectId || project.id
+      }));
       setSessionsByProject((current) => ({ ...current, [project.id]: nextSessions }));
       if (chooseLatest) {
         const next = nextSessions[0] || null;
@@ -3712,7 +3761,11 @@ export default function App() {
         if (project?.id) {
           apiFetch(`/api/projects/${encodeURIComponent(project.id)}/sessions`)
             .then((data) => {
-              setSessionsByProject((current) => ({ ...current, [project.id]: data.sessions || [] }));
+              const nextSessions = (data.sessions || []).map((session) => ({
+                ...session,
+                projectId: session.projectId || project.id
+              }));
+              setSessionsByProject((current) => ({ ...current, [project.id]: nextSessions }));
             })
             .catch(() => null);
         }
@@ -3766,14 +3819,26 @@ export default function App() {
     }
   }
 
-  async function handleSelectSession(session) {
-    setSelectedSession(session);
-    if (isDraftSession(session)) {
+  async function handleSelectSession(project, session) {
+    const projectForSession =
+      project ||
+      projects.find((item) => item.id === session?.projectId) ||
+      selectedProjectRef.current;
+    const nextSession = {
+      ...session,
+      projectId: session?.projectId || projectForSession?.id || null
+    };
+    if (projectForSession) {
+      setSelectedProject(projectForSession);
+      setExpandedProjectIds((current) => ({ ...current, [projectForSession.id]: true }));
+    }
+    setSelectedSession(nextSession);
+    if (isDraftSession(nextSession)) {
       setMessages([]);
       setDrawerOpen(false);
       return;
     }
-    const data = await apiFetch(`/api/sessions/${encodeURIComponent(session.id)}/messages?limit=120`);
+    const data = await apiFetch(`/api/sessions/${encodeURIComponent(nextSession.id)}/messages?limit=120`);
     setMessages(data.messages || []);
     setDrawerOpen(false);
   }
@@ -3787,8 +3852,12 @@ export default function App() {
       apiFetch(`/api/projects/${encodeURIComponent(project.id)}/sessions`)
     ]);
     const nextProjects = projectData.projects || [];
+    const nextSessions = (sessionData.sessions || []).map((session) => ({
+      ...session,
+      projectId: session.projectId || project.id
+    }));
     setProjects(nextProjects);
-    setSessionsByProject((current) => ({ ...current, [project.id]: sessionData.sessions || [] }));
+    setSessionsByProject((current) => ({ ...current, [project.id]: nextSessions }));
     const nextSelectedProject = nextProjects.find((item) => item.id === selectedProjectRef.current?.id);
     if (nextSelectedProject) {
       setSelectedProject(nextSelectedProject);
@@ -4135,12 +4204,14 @@ export default function App() {
       throw new Error(project ? 'message or attachments are required' : '请先选择项目');
     }
 
-    let sessionForTurn = selectedSession;
+    let sessionForTurn = resolveSessionForTurn(project);
     if (!sessionForTurn) {
       sessionForTurn = createDraftSession(project);
       setSelectedSession(sessionForTurn);
       setExpandedProjectIds((current) => ({ ...current, [project.id]: true }));
       setSessionsByProject((current) => upsertSessionInProject(current, project.id, sessionForTurn));
+    } else if (selectedSessionRef.current?.id !== sessionForTurn.id) {
+      setSelectedSession(sessionForTurn);
     }
 
     const turnId = createClientTurnId();

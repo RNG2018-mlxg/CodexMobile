@@ -348,7 +348,12 @@ async function parseSessionMetadata(filePath, sessionIndex, mobileSessionIndex) 
     return null;
   }
   const indexedSession = sessionIndex.get(meta.id);
-  const mobileSession = mobileSessionIndex.get(meta.id);
+  const rawMobileSession = mobileSessionIndex.get(meta.id);
+  const mobileSession =
+    rawMobileSession &&
+    normalizeComparablePath(rawMobileSession.projectPath) === normalizeComparablePath(meta.cwd)
+      ? rawMobileSession
+      : null;
   const indexEntry = indexedSession || mobileSession || {};
   const mobileMessages = Array.isArray(mobileSession?.messages) ? mobileSession.messages : [];
   const mobileUpdatedAt = mobileSession?.updatedAt || null;
@@ -536,11 +541,13 @@ export function getProject(projectId) {
 export function listProjectSessions(projectId) {
   return (cache.sessionsByProject.get(projectId) || []).map((session) => ({
     id: session.id,
+    projectId: session.projectId,
     title: session.title,
     summary: session.summary,
     model: session.model,
     provider: session.provider,
     source: session.source,
+    mobileOnly: Boolean(session.mobileOnly),
     messageCount: session.messageCount,
     updatedAt: session.updatedAt
   }));
