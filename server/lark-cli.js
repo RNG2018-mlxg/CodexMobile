@@ -127,7 +127,8 @@ function envValue(...keys) {
   return '';
 }
 
-export function larkCliEnvironment(baseEnv = process.env) {
+export function larkCliEnvironment(baseEnv = process.env, options = {}) {
+  const stripProxy = options.stripProxy !== false;
   const env = { ...baseEnv };
   const appId = String(env.LARK_APP_ID || env.CODEXMOBILE_FEISHU_APP_ID || '').trim();
   const appSecret = String(env.LARK_APP_SECRET || env.CODEXMOBILE_FEISHU_APP_SECRET || '').trim();
@@ -140,11 +141,14 @@ export function larkCliEnvironment(baseEnv = process.env) {
   }
   env.LARK_DOMAIN = String(env.LARK_DOMAIN || LARK_DOMAIN).trim() || LARK_DOMAIN;
   env.LARK_CLI_NO_PROXY = '1';
-  env.NO_PROXY = '*';
-  env.no_proxy = '*';
 
-  for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) {
-    delete env[key];
+  if (stripProxy) {
+    env.NO_PROXY = '*';
+    env.no_proxy = '*';
+
+    for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) {
+      delete env[key];
+    }
   }
 
   return env;
@@ -743,7 +747,7 @@ export async function buildCodexLarkCliContext(message = '') {
           'Do not run lark-cli commands. Reply in concise Chinese that Feishu authorization has expired or is unavailable, and ask the user to open the top-right Docs panel and reconnect Feishu.'
         ].join('\n')
       : '';
-  const env = larkCliEnvironment();
+  const env = larkCliEnvironment(process.env, { stripProxy: false });
   if (enabled) {
     const configRoot = await ensureAgentLarkConfigDir();
     const realCli = await resolveLarkCliCommand();

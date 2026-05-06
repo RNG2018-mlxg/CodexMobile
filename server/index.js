@@ -913,7 +913,11 @@ function runNextQueuedChat(queueKey) {
       emitJobEvent(job, payload);
     }
   ).then(async (finalSessionId) => {
-    if (finalSessionId) {
+    const shouldRegisterMobileSession =
+      finalSessionId &&
+      finalSessionId !== sessionId &&
+      finalSessionId !== job.selectedSessionId;
+    if (shouldRegisterMobileSession) {
       state.sessionId = finalSessionId;
       rememberConversationAlias(queueKey, finalSessionId);
       await registerMobileSession({
@@ -923,6 +927,9 @@ function runNextQueuedChat(queueKey) {
         summary: job.displayMessage,
         updatedAt: new Date().toISOString()
       });
+    } else if (finalSessionId) {
+      state.sessionId = finalSessionId;
+      rememberConversationAlias(queueKey, finalSessionId);
     }
     rememberTurn(job.turnId, {
       projectId: job.project.id,
@@ -1249,12 +1256,32 @@ async function handleApi(req, res, url) {
 
     const requestedSessionId = String(body.sessionId || '').trim();
     const isDraftSession = requestedSessionId.startsWith('draft-');
-    const session = requestedSessionId && !isDraftSession ? getSession(requestedSessionId) : null;
-    const mobileOnlySession = session?.mobileOnly ? session : null;
-    const draftSessionId = String(body.draftSessionId || '').trim() || mobileOnlySession?.id || null;
-    const selectedSessionId = session && !session.mobileOnly
-      ? session.id
-      : (requestedSessionId && !isDraftSession && !mobileOnlySession ? requestedSessionId : null);
+    let session = requestedSessionId && !isDraftSession ? getSession(requestedSessionId) : null;
+    if (requestedSessionId && !isDraftSession && !session) {
+      await refreshCodexCache().catch((error) => {
+        console.warn(`[chat] failed to refresh while resolving session=${requestedSessionId}: ${error.message}`);
+      });
+      session = getSession(requestedSessionId);
+    }
+    if (requestedSessionId && !isDraftSession && !session) {
+      console.warn(`[chat] rejected unknown session: session=${requestedSessionId} requestedProject=${project.id}`);
+      sendJson(res, 404, { error: 'Session not found in Codex App. Please reselect a visible thread or start a new conversation.' });
+      return;
+    }
+    if (session && session.projectId !== project.id) {
+      console.warn(
+        `[chat] rejected cross-project session: session=${session.id} sessionProject=${session.projectId} requestedProject=${project.id}`
+      );
+      sendJson(res, 409, { error: 'Session does not belong to the selected project. Please reselect the thread under the correct project.' });
+      return;
+    }
+    if (session?.mobileOnly) {
+      console.warn(`[chat] rejected mobile-only session resume: session=${session.id} project=${project.id}`);
+      sendJson(res, 409, { error: 'This mobile-only session is not resumable by Codex App. Please start a new conversation or select a Codex App thread.' });
+      return;
+    }
+    const draftSessionId = String(body.draftSessionId || '').trim() || null;
+    const selectedSessionId = session ? session.id : null;
     const turnId = String(body.clientTurnId || '').trim() || crypto.randomUUID();
     const config = getCacheSnapshot().config || {};
     const displayMessage = message || '请查看附件。';
@@ -1262,7 +1289,7 @@ async function handleApi(req, res, url) {
     const imagePrompt = isImageRequest(displayMessage, attachments)
       ? displayMessage
       : resolveContinuationImagePrompt(project.id, displayMessage);
-    const conversationSessionId = selectedSessionId || mobileOnlySession?.id || draftSessionId || null;
+    const conversationSessionId = selectedSessionId || draftSessionId || null;
     rememberTurn(turnId, {
       projectId: project.id,
       projectPath: project.path,
@@ -1289,7 +1316,7 @@ async function handleApi(req, res, url) {
 
     if (imagePrompt) {
       rememberImagePrompt(project.id, imagePrompt);
-      const imageSessionId = selectedSessionId || mobileOnlySession?.id || `mobile-image-${crypto.randomUUID()}`;
+      const imageSessionId = selectedSessionId || `mobile-image-${crypto.randomUUID()}`;
       const previousSessionId = imageSessionId === conversationSessionId ? draftSessionId : conversationSessionId;
       const imageLabel = attachments.some((attachment) => attachment.kind === 'image') ? '正在编辑图片' : '正在生成图片';
       activeImageRuns.set(turnId, {
